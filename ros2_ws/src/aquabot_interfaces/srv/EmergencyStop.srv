@@ -1,0 +1,7 @@
+# Emergency Stop Service
+bool engage     # true to engage emergency stop, false to reset/clear
+string reason
+---
+bool success
+string current_mode
+string message

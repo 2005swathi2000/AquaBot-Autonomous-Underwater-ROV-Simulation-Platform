@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  # Fast-API & Simulation Telemetry Backend
+  aquabot-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aquabot_backend
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  # ROS 2 Humble Integration Container
+  aquabot-ros2:
+    build:
+      context: ./ros2_ws
+      dockerfile: Dockerfile
+    container_name: aquabot_ros2
+    network_mode: "host"
+    restart: unless-stopped
+    profiles:
+      - ros2
