@@ -1,55 +1,51 @@
 """
-Live End-to-End WebSocket and REST streaming test against running AquaBot server.
+End-to-End WebSocket and REST streaming test against AquaBot FastAPI backend.
+Uses FastAPI TestClient for deterministic, in-process WebSocket and REST verification.
 """
 
-import json
-import pytest
-import httpx
-import websockets
+from fastapi.testclient import TestClient
+from backend.app.main import app
 
 
 def test_live_rest_and_websocket():
-    import asyncio
-    async def run_test():
-        # 1. Test REST health
-        async with httpx.AsyncClient() as client:
-            res = await client.get("http://127.0.0.1:8000/health")
-            assert res.status_code == 200
-            data = res.json()
-            assert data["status"] == "HEALTHY"
+    with TestClient(app) as client:
+        # 1. Test REST health check
+        res = client.get("/health")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "HEALTHY"
+        assert data["service"] == "AquaBot-ROV-Simulation-Backend"
 
-            res_obs = await client.get("http://127.0.0.1:8000/api/v1/world/obstacles")
-            assert res_obs.status_code == 200
-            assert len(res_obs.json()["obstacles"]) == 7
+        # 2. Test World Obstacles REST endpoint
+        res_obs = client.get("/api/v1/world/obstacles")
+        assert res_obs.status_code == 200
+        assert len(res_obs.json()["obstacles"]) == 7
 
-        # 2. Test WebSocket connection and bi-directional telemetry streaming
-        uri = "ws://127.0.0.1:8000/ws/telemetry"
-        async with websockets.connect(uri) as ws:
-            # Initial frame
-            raw_init = await ws.recv()
-            init_frame = json.loads(raw_init)
+        # 3. Test WebSocket connection and bi-directional telemetry streaming
+        with client.websocket_connect("/ws/telemetry") as ws:
+            # Verify Initial Handshake Frame
+            init_frame = ws.receive_json()
             assert init_frame.get("type") == "INIT"
             assert "obstacles" in init_frame["world"]
+            assert len(init_frame["world"]["obstacles"]) == 7
 
-            # Send ping
-            await ws.send(json.dumps({"action": "ping"}))
-            pong_msg = json.loads(await ws.recv())
+            # Test Ping / Pong latency check
+            ws.send_json({"action": "ping"})
+            pong_msg = ws.receive_json()
             assert pong_msg.get("type") == "PONG" or "position" in pong_msg
 
-            # Send teleop drive command
-            await ws.send(json.dumps({"action": "teleop", "surge": 0.9, "sway": 0.0, "heave": 0.0, "yaw": 0.3}))
+            # Test Teleop Command Transmission
+            ws.send_json({"action": "teleop", "surge": 0.9, "sway": 0.0, "heave": 0.0, "yaw": 0.3})
 
             # Read streaming telemetry frames
             for _ in range(3):
-                raw_frame = await ws.recv()
-                frame = json.loads(raw_frame)
+                frame = ws.receive_json()
                 if "position" in frame:
                     assert "sensors" in frame
                     assert "depth" in frame["sensors"]
                     assert "sonar" in frame["sensors"]
                     assert "battery" in frame["sensors"]
+                    assert "thrusters" in frame
 
-            # Reset simulation
-            await ws.send(json.dumps({"action": "reset"}))
-
-    asyncio.run(run_test())
+            # Test Simulation Reset via WebSocket
+            ws.send_json({"action": "reset"})

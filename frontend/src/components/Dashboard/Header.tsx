@@ -64,9 +64,10 @@ export const Header: React.FC<Props> = ({
             </>
           ) : (
             <>
-              <span className="w-2 h-2 rounded-full bg-amber-400" />
-              <WifiOff className="w-3.5 h-3.5 text-amber-400" />
-              <span className="text-amber-400 font-semibold">CONNECTING</span>
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+              <WifiOff className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="text-cyan-300 font-semibold">STANDALONE</span>
+              <span className="text-slate-400 text-[10px] hidden sm:inline">(20 Hz Sim)</span>
             </>
           )}
         </div>

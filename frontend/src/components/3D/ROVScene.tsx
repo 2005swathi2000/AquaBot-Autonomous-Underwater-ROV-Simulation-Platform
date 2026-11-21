@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
-import { TelemetryPayload, WorldConfig, Waypoint } from '../../types';
+import { TelemetryPayload, WorldConfig } from '../../types';
 import { ArtificialHorizon } from '../HUD/ArtificialHorizon';
-import { Eye, Compass, Move3d, Crosshair, PlusCircle } from 'lucide-react';
+import { Eye, Compass, Move3d, Crosshair } from 'lucide-react';
 
 interface Props {
   telemetry: TelemetryPayload | null;
@@ -12,7 +12,26 @@ interface Props {
 
 type CameraMode = 'CHASE' | 'FREE' | 'FPV' | 'TOPDOWN';
 
-export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) => {
+// Helper to recursively dispose geometries and materials from Three.js scene graph
+const disposeHierarchy = (object: THREE.Object3D) => {
+  object.traverse((child) => {
+    if ((child as THREE.Mesh).isMesh || (child as THREE.Line).isLine) {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
+      }
+      if (mesh.material) {
+        if (Array.isArray(mesh.material)) {
+          mesh.material.forEach((mat) => mat.dispose());
+        } else {
+          mesh.material.dispose();
+        }
+      }
+    }
+  });
+};
+
+export const ROVScene: React.FC<Props> = ({ telemetry, world }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [cameraMode, setCameraMode] = useState<CameraMode>('CHASE');
   const [hudVisible, setHudVisible] = useState<boolean>(true);
@@ -29,7 +48,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
   const waypointsGroupRef = useRef<THREE.Group | null>(null);
   const obstaclesGroupRef = useRef<THREE.Group | null>(null);
 
-  // Mouse interaction state for free camera
+  // Mouse & Touch interaction state for free camera
   const mouseState = useRef({
     isDragging: false,
     prevX: 0,
@@ -49,8 +68,8 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const width = containerRef.current.clientWidth;
-    const height = containerRef.current.clientHeight;
+    const width = containerRef.current.clientWidth || 600;
+    const height = containerRef.current.clientHeight || 400;
 
     // 1. Scene setup
     const scene = new THREE.Scene();
@@ -59,14 +78,19 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     sceneRef.current = scene;
 
     // 2. Camera setup
-    const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 200);
+    const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 150);
     camera.position.set(0, 5, 12);
     cameraRef.current = camera;
 
-    // 3. Renderer setup
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
+    // 3. Renderer setup: Optimized for 8 GB RAM laptops & integrated GPUs
+    // Limit pixel ratio to 1.25 to prevent VRAM memory overload on high-DPI displays
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      powerPreference: 'high-performance'
+    });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
     containerRef.current.appendChild(renderer.domElement);
@@ -86,7 +110,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     scene.add(fillLight);
 
     // 5. Ocean Surface Plane (Y = 0)
-    const surfaceGeo = new THREE.PlaneGeometry(120, 120, 24, 24);
+    const surfaceGeo = new THREE.PlaneGeometry(100, 100, 16, 16);
     const surfaceMat = new THREE.MeshBasicMaterial({
       color: 0x0ea5e9,
       transparent: true,
@@ -100,7 +124,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     scene.add(surfaceMesh);
 
     // 6. Seabed Sand Plane with Grid (Y = -35)
-    const seabedGeo = new THREE.PlaneGeometry(100, 100, 32, 32);
+    const seabedGeo = new THREE.PlaneGeometry(90, 90, 16, 16);
     const seabedMat = new THREE.MeshStandardMaterial({
       color: 0x0f2b48,
       roughness: 0.9,
@@ -112,7 +136,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     scene.add(seabedMesh);
 
     // Grid on seabed for spatial orientation
-    const grid = new THREE.GridHelper(90, 45, 0x00e5ff, 0x1a3a60);
+    const grid = new THREE.GridHelper(80, 40, 0x00e5ff, 0x1a3a60);
     grid.position.y = -34.9;
     scene.add(grid);
 
@@ -121,7 +145,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     rovGroupRef.current = rovGroup;
 
     // A. Main Pressure Hull (Chassis)
-    const hullGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.2, 16);
+    const hullGeo = new THREE.CylinderGeometry(0.35, 0.35, 1.2, 14);
     const hullMat = new THREE.MeshStandardMaterial({
       color: 0x1e293b,
       metalness: 0.7,
@@ -131,7 +155,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     hull.rotation.x = Math.PI / 2;
     rovGroup.add(hull);
 
-    // B. High-Visibility Buoyancy Foam Blocks (Top Port & Starboard)
+    // B. High-Visibility Buoyancy Foam Blocks
     const foamGeo = new THREE.BoxGeometry(0.25, 0.18, 1.1);
     const foamMat = new THREE.MeshStandardMaterial({
       color: 0xfacc15,
@@ -147,7 +171,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     rovGroup.add(foamLeft);
 
     // C. Acrylic Front Camera Dome
-    const domeGeo = new THREE.SphereGeometry(0.32, 16, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+    const domeGeo = new THREE.SphereGeometry(0.32, 14, 14, 0, Math.PI * 2, 0, Math.PI / 2);
     const domeMat = new THREE.MeshPhysicalMaterial({
       color: 0x38bdf8,
       transparent: true,
@@ -163,7 +187,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
 
     // D. Dual LED Spotlights
     const ledMat = new THREE.MeshBasicMaterial({ color: 0xecfeff });
-    const spotGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.15, 12);
+    const spotGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.15, 10);
     spotGeo.rotateX(Math.PI / 2);
 
     const lightR = new THREE.Mesh(spotGeo, ledMat);
@@ -187,7 +211,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     const propMat = new THREE.MeshStandardMaterial({ color: 0x06b6d4, metalness: 0.5 });
 
     const createThruster = (x: number, y: number, z: number, rotY: number, rotX: number = 0) => {
-      const ductGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.22, 12, 1, true);
+      const ductGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.22, 10, 1, true);
       const duct = new THREE.Mesh(ductGeo, thrusterMat);
       duct.position.set(x, y, z);
       duct.rotation.y = rotY;
@@ -265,13 +289,14 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
       if (!containerRef.current || !renderer || !camera) return;
       const w = containerRef.current.clientWidth;
       const h = containerRef.current.clientHeight;
+      if (w === 0 || h === 0) return;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
     };
     window.addEventListener('resize', handleResize);
 
-    // Mouse Controls for Free Camera mode
+    // Mouse & Touch Controls
     const dom = renderer.domElement;
     const onMouseDown = (e: MouseEvent) => {
       mouseState.current.isDragging = true;
@@ -298,15 +323,54 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
       mouseState.current.radius = Math.max(2.5, Math.min(60.0, mouseState.current.radius + e.deltaY * 0.02));
     };
 
+    // Mobile Touch Handlers
+    let touchX = 0;
+    let touchY = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 1) {
+        mouseState.current.isDragging = true;
+        touchX = e.touches[0].clientX;
+        touchY = e.touches[0].clientY;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!mouseState.current.isDragging || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - touchX;
+      const dy = e.touches[0].clientY - touchY;
+      touchX = e.touches[0].clientX;
+      touchY = e.touches[0].clientY;
+
+      mouseState.current.theta -= dx * 0.008;
+      mouseState.current.phi = Math.max(0.1, Math.min(Math.PI - 0.1, mouseState.current.phi - dy * 0.008));
+    };
+
+    const onTouchEnd = () => {
+      mouseState.current.isDragging = false;
+    };
+
     dom.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     dom.addEventListener('wheel', onWheel);
+    dom.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
+
+    // Tab visibility handling: pause render loop when tab is hidden to save RAM/CPU
+    let isVisible = !document.hidden;
+    const handleVisibility = () => {
+      isVisible = !document.hidden;
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
 
     // Animation Loop
     let animId: number;
     const animate = () => {
       animId = requestAnimationFrame(animate);
+
+      // Skip GPU render when tab is backgrounded
+      if (!isVisible) return;
 
       // Rotate thrusters for dynamic animation
       thrusterProps.forEach((p, idx) => {
@@ -319,7 +383,6 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
         const rovYaw = rovGroup.rotation.y;
 
         if (cameraMode === 'CHASE') {
-          // Smooth chase camera behind ROV
           const chaseDist = 5.5;
           const chaseHeight = 2.0;
           const targetCamX = rovPos.x - Math.sin(rovYaw) * chaseDist;
@@ -329,17 +392,14 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
           camera.position.lerp(new THREE.Vector3(targetCamX, targetCamY, targetCamZ), 0.08);
           camera.lookAt(rovPos.x, rovPos.y + 0.2, rovPos.z);
         } else if (cameraMode === 'FPV') {
-          // Cockpit camera positioned inside acrylic dome looking forward
           camera.position.set(rovPos.x, rovPos.y + 0.05, rovPos.z);
           const lookX = rovPos.x + Math.sin(rovYaw) * 10;
           const lookZ = rovPos.z + Math.cos(rovYaw) * 10;
           camera.lookAt(lookX, rovPos.y + 0.05, lookZ);
         } else if (cameraMode === 'TOPDOWN') {
-          // Tactical 2D/3D Map View
           camera.position.lerp(new THREE.Vector3(rovPos.x, rovPos.y + 24.0, rovPos.z + 0.1), 0.1);
           camera.lookAt(rovPos.x, rovPos.y, rovPos.z);
         } else {
-          // Free Orbit Controls
           const st = mouseState.current;
           const cx = rovPos.x + st.radius * Math.sin(st.phi) * Math.sin(st.theta);
           const cy = rovPos.y + st.radius * Math.cos(st.phi);
@@ -357,29 +417,39 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     return () => {
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
+      document.removeEventListener('visibilitychange', handleVisibility);
       dom.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
       dom.removeEventListener('wheel', onWheel);
+      dom.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+
+      // Deep clean Three.js resources to prevent memory leaks on 8 GB RAM machines
+      disposeHierarchy(scene);
       if (renderer.domElement && containerRef.current) {
         containerRef.current.removeChild(renderer.domElement);
       }
       renderer.dispose();
+      renderer.forceContextLoss();
     };
   }, [cameraMode, toThreeCoords]);
 
-  // Update Obstacles when world config loads
+  // Update Obstacles when world config loads with proper buffer disposal
   useEffect(() => {
     if (!world || !obstaclesGroupRef.current) return;
     const group = obstaclesGroupRef.current;
     while (group.children.length > 0) {
-      group.remove(group.children[0]);
+      const child = group.children[0];
+      disposeHierarchy(child);
+      group.remove(child);
     }
 
     world.obstacles.forEach((obs) => {
       const pos = toThreeCoords(obs.x, obs.y, obs.z);
       // Create pillar obstacle
-      const geo = new THREE.CylinderGeometry(obs.radius, obs.radius * 1.1, obs.height, 16);
+      const geo = new THREE.CylinderGeometry(obs.radius, obs.radius * 1.1, obs.height, 14);
       const mat = new THREE.MeshStandardMaterial({
         color: obs.color || 0x475569,
         roughness: 0.8,
@@ -389,7 +459,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
       mesh.position.copy(pos);
 
       // Warning beacon ring around obstacle base
-      const ringGeo = new THREE.RingGeometry(obs.radius, obs.radius + 0.35, 24);
+      const ringGeo = new THREE.RingGeometry(obs.radius, obs.radius + 0.35, 18);
       const ringMat = new THREE.MeshBasicMaterial({
         color: 0xef4444,
         side: THREE.DoubleSide,
@@ -405,12 +475,14 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     });
   }, [world, toThreeCoords]);
 
-  // Update Waypoints Visualization
+  // Update Waypoints Visualization with proper buffer disposal
   useEffect(() => {
     if (!telemetry?.navigation?.waypoints || !waypointsGroupRef.current) return;
     const group = waypointsGroupRef.current;
     while (group.children.length > 0) {
-      group.remove(group.children[0]);
+      const child = group.children[0];
+      disposeHierarchy(child);
+      group.remove(child);
     }
 
     const waypoints = telemetry.navigation.waypoints;
@@ -420,8 +492,8 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
       const pos = toThreeCoords(wp.x, wp.y, wp.z);
       points.push(pos);
 
-      // Glowing waypoint beacon beacon sphere
-      const sphereGeo = new THREE.SphereGeometry(0.35, 12, 12);
+      // Waypoint beacon sphere
+      const sphereGeo = new THREE.SphereGeometry(0.35, 10, 10);
       const isReached = wp.reached;
       const isCurrent = idx === telemetry.navigation.current_wp_index;
 
@@ -436,7 +508,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
       group.add(sphere);
 
       // Vertical guide beam connecting waypoint to surface
-      const beamGeo = new THREE.CylinderGeometry(0.04, 0.04, 35, 8);
+      const beamGeo = new THREE.CylinderGeometry(0.04, 0.04, 35, 6);
       const beamMat = new THREE.MeshBasicMaterial({
         color: isCurrent ? 0x00e5ff : 0x0284c7,
         transparent: true,
@@ -475,7 +547,6 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
     rovGroupRef.current.position.copy(threePos);
 
     // Orientation: Three.js Euler (Y: Yaw, X: Pitch, Z: Roll)
-    // Note: Heading is clockwise from North in navigation, Three.js Y rotation is counter-clockwise
     const yawRad = THREE.MathUtils.degToRad(ori.yaw_deg);
     const pitchRad = THREE.MathUtils.degToRad(ori.pitch_deg);
     const rollRad = THREE.MathUtils.degToRad(ori.roll_deg);
@@ -495,37 +566,34 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
           const targetZ = Math.cos(angleRad) * dist;
 
           const positions = line.geometry.attributes.position.array as Float32Array;
-          // Point 1 (emitter)
           positions[0] = 0;
           positions[1] = 0;
           positions[2] = 0.6;
-          // Point 2 (hit)
           positions[3] = targetX;
           positions[4] = 0;
           positions[5] = targetZ;
           line.geometry.attributes.position.needsUpdate = true;
 
-          // Color based on beam proximity
           const mat = line.material as THREE.LineBasicMaterial;
           if (dist < 1.6) {
-            mat.color.setHex(0xef4444); // Critical red
+            mat.color.setHex(0xef4444);
             mat.opacity = 0.95;
           } else if (dist < 3.5) {
-            mat.color.setHex(0xeab308); // Warning yellow
+            mat.color.setHex(0xeab308);
             mat.opacity = 0.75;
           } else {
-            mat.color.setHex(0x00e5ff); // Clear cyan
+            mat.color.setHex(0x00e5ff);
             mat.opacity = 0.45;
           }
         }
       });
     }
 
-    // Update Breadcrumbs (every ~500ms or when moved > 0.5m)
+    // Update Breadcrumbs (capped at 100 points for memory optimization on 8 GB systems)
     const pts = breadcrumbsPointsRef.current;
     if (pts.length === 0 || pts[pts.length - 1].distanceTo(threePos) > 0.4) {
       pts.push(threePos.clone());
-      if (pts.length > 150) pts.shift();
+      if (pts.length > 100) pts.shift();
 
       if (breadcrumbsRef.current) {
         breadcrumbsRef.current.geometry.setFromPoints(pts);
@@ -536,7 +604,7 @@ export const ROVScene: React.FC<Props> = ({ telemetry, world, onAddWaypoint }) =
   return (
     <div className="relative w-full h-full min-h-[420px] rounded-xl overflow-hidden border border-cyan-500/20 bg-navy-950 shadow-2xl">
       {/* Three.js Canvas Container */}
-      <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+      <div ref={containerRef} className="w-full h-full cursor-grab active:cursor-grabbing touch-none" />
 
       {/* Artificial Horizon HUD Overlay */}
       {hudVisible && telemetry && (

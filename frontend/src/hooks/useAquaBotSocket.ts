@@ -36,6 +36,7 @@ export function useAquaBotSocket() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttemptsRef = useRef<number>(0);
   const pingStartRef = useRef<number>(0);
   const serverConnectedRef = useRef<boolean>(false);
 
@@ -379,10 +380,15 @@ export function useAquaBotSocket() {
     return () => clearInterval(interval);
   }, []);
 
-  // WebSocket Connection
+  // WebSocket Connection with Exponential Backoff and Fallback Logging
   const connect = useCallback(() => {
     if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
+    }
+
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
 
     try {
@@ -392,8 +398,16 @@ export function useAquaBotSocket() {
       ws.onopen = () => {
         setIsConnected(true);
         serverConnectedRef.current = true;
+        reconnectAttemptsRef.current = 0;
         pingStartRef.current = performance.now();
         ws.send(JSON.stringify({ action: 'ping' }));
+
+        localSimState.current.logs.unshift({
+          time: Math.round(localSimState.current.time),
+          timestamp: new Date().toLocaleTimeString(),
+          level: 'INFO',
+          message: 'Authoritative backend WebSocket connected (20 Hz telemetry).'
+        });
       };
 
       ws.onmessage = (event) => {
@@ -413,23 +427,40 @@ export function useAquaBotSocket() {
       };
 
       ws.onclose = () => {
+        const wasConnected = serverConnectedRef.current;
         setIsConnected(false);
         serverConnectedRef.current = false;
         wsRef.current = null;
+
+        if (wasConnected) {
+          localSimState.current.logs.unshift({
+            time: Math.round(localSimState.current.time),
+            timestamp: new Date().toLocaleTimeString(),
+            level: 'WARN',
+            message: 'Backend disconnected. Seamlessly switched to client-side autonomous physics fallback.'
+          });
+        }
+
+        const delay = Math.min(10000, Math.round(1500 * Math.pow(1.35, reconnectAttemptsRef.current) + Math.random() * 400));
+        reconnectAttemptsRef.current += 1;
         reconnectTimeoutRef.current = setTimeout(() => {
           connect();
-        }, 3000);
+        }, delay);
       };
 
       ws.onerror = () => {
         serverConnectedRef.current = false;
-        ws.close();
+        try {
+          ws.close();
+        } catch {}
       };
     } catch {
       serverConnectedRef.current = false;
+      const delay = Math.min(10000, Math.round(1500 * Math.pow(1.35, reconnectAttemptsRef.current) + Math.random() * 400));
+      reconnectAttemptsRef.current += 1;
       reconnectTimeoutRef.current = setTimeout(() => {
         connect();
-      }, 3000);
+      }, delay);
     }
   }, []);
 
